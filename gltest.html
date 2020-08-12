@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+
+<head>
+  <title>WebGL 2 Samples - draw_instanced_ubo</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+</head>
+
+<body>
+  <div>
+    <div style="float:left">
+      <canvas id="cnvs" width="800" height="800"></canvas>
+    </div>
+    <script>
+      // asc draw_lines.asc --sourceMap --importMemory --extension asc -o draw_lines.wasm
+      V_COLOR_LINE_SHADER = `#version 300 es
+      precision highp float;
+
+      uniform vec4 u_color;
+
+      in vec2 position;
+      out vec4 c;
+      
+      void main() {
+        gl_Position = vec4( position, 0.0, 1.0 );
+        c = u_color/255.0;
+      }
+  `;
+
+      F_SHADER = `#version 300 es
+      precision highp float;
+
+      in vec4 c;
+      out vec4 color;
+
+      void main() {
+        color = c;
+      }
+  `;
+
+      const memory = new WebAssembly.Memory({ initial: 1 }); // linear memory
+
+      var ship_loop_color_ptr = null;
+      const canvas = this.canvas = document.getElementById('cnvs');
+
+      this.canvas_size = canvas.width | this.canvas_size;
+      this.gl = canvas.getContext('webgl2');
+      const gl = this.gl;
+
+      // CREATE COLOR LINE VERTEX SHADER
+      let color_line_vertex_shader = gl.createShader(gl.VERTEX_SHADER)
+      gl.shaderSource(color_line_vertex_shader, this.V_COLOR_LINE_SHADER);
+      gl.compileShader(color_line_vertex_shader);
+
+      if (!gl.getShaderParameter(color_line_vertex_shader, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(color_line_vertex_shader));
+      }
+
+      // CREATE FRAGMENT SHADER
+      let fragment_shader = gl.createShader(gl.FRAGMENT_SHADER)
+      gl.shaderSource(fragment_shader, this.F_SHADER);
+      gl.compileShader(fragment_shader);
+
+      if (!gl.getShaderParameter(fragment_shader, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(fragment_shader));
+      }
+
+      // CREATE COLOR LINE RENDERING PROGRAM
+      this.color_line_program = gl.createProgram();
+
+      gl.attachShader(this.color_line_program, color_line_vertex_shader);
+      gl.attachShader(this.color_line_program, fragment_shader);
+
+      gl.linkProgram(this.color_line_program);
+      if (!gl.getProgramParameter(this.color_line_program, gl.LINK_STATUS)) {
+        console.error(gl.getProgramInfoLog(this.color_line_program));
+      }
+
+      var program = color_line_program;
+      gl.useProgram(program);
+      let color_location = gl.getUniformLocation(program, "u_color");
+      gl.uniform4fv(color_location, [255, 255, 0, 255]);
+
+      function clear(r = 0.0, g = 0.0, b = 0.0, a = 1.0) {
+        gl.clearColor(r, g, b, a);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
+
+      function drawLines(line_data, color_data) {
+        // FIND OUT IF YOU CAN REUSE THE BUFFER
+        let buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, line_data, gl.STATIC_DRAW);
+
+
+        let position_al = gl.getAttribLocation(program, 'position');
+        gl.enableVertexAttribArray(position_al);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+
+        let color_location = gl.getUniformLocation(program, "u_color");
+        /*
+        console.log(`
+        color_data: ${color_data}
+        `);
+        */
+        gl.uniform4fv(color_location, color_data);
+
+        const dimensions = 2;
+        const data_type = gl.FLOAT;
+        const normalize = gl.FALSE;
+        const stride = 0;
+        const offset = 0;
+        gl.vertexAttribPointer(position_al, dimensions, data_type, normalize, stride, offset);
+
+        gl.drawArrays(gl.LINE_LOOP, 0, line_data.length / 2);
+      }
+
+      let importObject = {
+        env: {
+          memory: memory,
+          abort: () => { console.log('abort'); }
+        }
+      };
+
+      var asc_animation = null;
+      var theta = 0.01;
+      var floats;
+      function animation_frame() {
+        clear();
+        theta += 0.01;
+        if (theta >= 6.28318) {
+          theta = 0.0;
+        }
+        let ptr = asc_animation(0.001);//0.01);
+        let color_ptr = ship_loop_color_ptr;
+        let loop_count = new Int32Array(memory.buffer,
+          ptr, 1)[0];
+
+        ptr += 4;
+        let loop_sizes = new Int32Array(memory.buffer,
+          ptr, loop_count)
+
+        ptr += 4 * loop_count;
+
+        for (var i = 0; i < loop_count; i++) {
+          let loop_size = loop_sizes[i];
+          floats = new Float32Array(memory.buffer,
+            ptr, loop_size);
+          bytes = new Uint8Array(memory.buffer,
+            color_ptr, 4);
+          drawLines(floats, bytes);
+          ptr += loop_size * 4;
+          color_ptr += 4;
+        }
+        requestAnimationFrame(animation_frame);
+      }
+
+      (async () => {
+        let obj = await
+          WebAssembly.instantiateStreaming(fetch('draw_lines.wasm'),
+            importObject);
+        clear();
+        asc_animation = obj.instance.exports.animation;
+        ship_loop_color_ptr = obj.instance.exports.color_addr();
+        requestAnimationFrame(animation_frame);
+      })();
+
+
+    </script>
+</body>
+
+</html>
